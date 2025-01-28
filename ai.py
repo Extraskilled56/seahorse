@@ -50,6 +50,10 @@ def tokenize_texts(texts, tokenizer, max_length=128):
         return_tensors='pt'
     )
 
+def count_parameters(model):
+    """Count the total number of trainable parameters in the model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 def main():
     # Check system resources
     cpu_cores, ram_gb, gpu_memory = get_system_resources()
@@ -67,6 +71,10 @@ def main():
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
     model.to(device)
+
+    # Print total number of parameters
+    total_params = count_parameters(model)
+    print(f"Total Trainable Parameters: {total_params:,}")
 
     # Load and prepare data
     df = load_dataset()
