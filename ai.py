@@ -1,120 +1,118 @@
-import tensorflow as tf
-from transformers import BertTokenizer, TFBertForSequenceClassification
+import torch
+from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 import pandas as pd
 import numpy as np
-from dataset import show_examples
+from torch.utils.data import DataLoader, TensorDataset
 import os
 
-# Load the dataset from dataset.csv
 def load_dataset():
-    # Load the existing dataset
     if os.path.exists("dataset.csv"):
         df = pd.read_csv("dataset.csv")
         return df
-    else:
-        print("Dataset not found! Please add some examples using dataset.py.")
-        return None
+    print("Dataset not found! Add examples using dataset.py.")
+    return None
 
-# Step 2: Preprocess and tokenize text
 def tokenize_texts(texts, tokenizer, max_length=128):
     return tokenizer(
         texts,
         max_length=max_length,
-        padding="max_length",
+        padding='max_length',
         truncation=True,
-        return_tensors="tf",
+        return_tensors='pt'
     )
 
-# Main logic for model training and testing
 def main():
-    # Load dataset
+    # Force CPU usage
+    device = torch.device("cpu")
+
+    # Initialize components
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
+    model.to(device)
+    
+    # Load and prepare data
     df = load_dataset()
     if df is None:
         return
 
-    # Step 1: Prepare the dataset
-    X = tokenize_texts(df["text"].tolist(), tokenizer)
-    y = np.array(df["label"])
-
-    X_input_ids = X["input_ids"].numpy()
-    X_attention_mask = X["attention_mask"].numpy()
-
-    # Step 3: Train-test split
-    X_train_ids, X_test_ids, y_train, y_test = train_test_split(
-        X_input_ids, y, test_size=0.2, random_state=42
+    # Tokenization
+    encoded = tokenize_texts(df['text'].tolist(), tokenizer)
+    labels = torch.tensor(df['label'].values).to(device)
+    
+    # Create dataset
+    dataset = TensorDataset(encoded['input_ids'], encoded['attention_mask'], labels)
+    train_data, val_data = train_test_split(dataset, test_size=0.2, random_state=42)
+    
+    # Create dataloaders
+    train_loader = DataLoader(train_data, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_data, batch_size=16)
+    
+    # Class weights
+    class_weights = compute_class_weight(
+        'balanced',
+        classes=np.unique(df['label']),
+        y=df['label']
     )
-
-    X_train_mask, X_test_mask, _, _ = train_test_split(
-        X_attention_mask, y, test_size=0.2, random_state=42
-    )
-
-    # Step 4: Define and compile the model
-    model = TFBertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=2)
-
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=5e-5),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-        metrics=["accuracy"],
-    )
-
-    # Step 5: Train the model
-    print("Training the model...")
-    model.fit(
-        x={
-            "input_ids": X_train_ids,
-            "attention_mask": X_train_mask,
-        },
-        y=y_train,
-        validation_data=(
-            {
-                "input_ids": X_test_ids,
-                "attention_mask": X_test_mask,
-            },
-            y_test,
-        ),
-        epochs=5,
-        batch_size=4,
-    )
-
-    # Step 6: Evaluate the model
-    loss, accuracy = model.evaluate(
-        {
-            "input_ids": X_test_ids,
-            "attention_mask": X_test_mask,
-        },
-        y_test,
-    )
-    print(f"Test accuracy: {accuracy:.2f}")
-
-    # Step 7: Dynamic input for predictions
-    print("\nEnter text to classify (type 'exit' to quit):")
-    while True:
-        user_input = input("Text: ")
-        if user_input.lower() == "exit":
-            print("Exiting...")
-            break
+    class_weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+    
+    # Training setup
+    optimizer = AdamW(model.parameters(), lr=3e-5)
+    loss_fn = torch.nn.CrossEntropyLoss(weight=class_weights)
+    
+    # Training loop
+    print("Training Seahorse model...")
+    for epoch in range(15):
+        model.train()
+        total_loss = 0
         
-        # Tokenize user input
-        tokens = tokenize_texts([user_input], tokenizer)
-        predictions = model.predict(
-            {
-                "input_ids": tokens["input_ids"].numpy(),
-                "attention_mask": tokens["attention_mask"].numpy(),
-            }
-        ).logits
+        for batch in train_loader:
+            optimizer.zero_grad()
+            input_ids, attention_mask, labels = [b.to(device) for b in batch]
+            
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
         
-        # Apply softmax to get probabilities
-        prob = tf.nn.softmax(predictions, axis=-1).numpy()
+        # Validation
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                input_ids, attention_mask, labels = [b.to(device) for b in batch]
+                outputs = model(input_ids, attention_mask=attention_mask)
+                _, predicted = torch.max(outputs.logits, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
         
-        # Get prediction (class with highest probability)
-        predicted_class = np.argmax(prob, axis=1)[0]
-        confidence = prob[0, predicted_class] * 100  # Confidence in percentage
-        
-        label = "Human" if predicted_class == 0 else "AI"
-        print(f"Predicted Label: {label}")
-        print(f"Confidence: {confidence:.2f}%\n")
+        print(f"Epoch {epoch+1} | Loss: {total_loss/len(train_loader):.4f} | Val Acc: {correct/total:.4f}")
+
+    # Save PyTorch model
+    model.save_pretrained("seahorse_pt")
+    tokenizer.save_pretrained("seahorse_pt")
+    print("Saved PyTorch model to 'seahorse_pt' directory")
+
+    # Test the model on the entire dataset
+    print("\nTesting the model on the entire dataset...")
+    test_loader = DataLoader(dataset, batch_size=16)
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids, attention_mask, labels = [b.to(device) for b in batch]
+            outputs = model(input_ids, attention_mask=attention_mask)
+            _, predicted = torch.max(outputs.logits, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
+    accuracy = correct / total
+    print(f"Overall Accuracy: {accuracy * 100:.2f}%")
 
 if __name__ == "__main__":
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
     main()
