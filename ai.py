@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader, TensorDataset
 BASE_DIR = Path(__file__).resolve().parent
 DATASET_PATH = BASE_DIR / "dataset.csv"
 LOG_FILE = BASE_DIR / "ai.log"
-MODEL_SAVE_DIR = BASE_DIR / "seahorse_pt"
+MODEL_SAVE_PATH = BASE_DIR / "seahorse.pt"  # Single file output
 
 # Configure logging to output to both console and a log file.
 logging.basicConfig(
@@ -111,7 +111,7 @@ def main():
     labels = torch.tensor(df['label'].values)
     dataset = TensorDataset(encoded['input_ids'], encoded['attention_mask'], labels)
 
-    # Optionally, split dataset into training and testing sets.
+    # Split dataset into training and testing sets.
     train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
     # DataLoader settings.
@@ -142,6 +142,19 @@ def main():
 
     logging.info("Training Seahorse model...")
     num_epochs = 10  # Adjust as needed.
+    
+    # Determine validation epochs:
+    if num_epochs < 4:
+        validation_epochs = list(range(num_epochs))
+    else:
+        # Validate on four evenly spaced epochs.
+        validation_epochs = sorted(list(set([
+            (num_epochs // 4) - 1, 
+            (num_epochs // 2) - 1, 
+            (3 * num_epochs // 4) - 1, 
+            num_epochs - 1
+        ])))
+    
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -163,28 +176,45 @@ def main():
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
-        logging.info(f"Epoch {epoch+1:02d} | Loss: {avg_loss:.4f}")
+        logging.info(f"Epoch {epoch+1:02d} | Training Loss: {avg_loss:.4f}")
 
-    # Save the trained model and tokenizer.
-    MODEL_SAVE_DIR.mkdir(exist_ok=True)
-    model.save_pretrained(str(MODEL_SAVE_DIR))
-    tokenizer.save_pretrained(str(MODEL_SAVE_DIR))
-    logging.info(f"Saved PyTorch model to '{MODEL_SAVE_DIR}' directory")
+        # Perform validation only on the designated epochs.
+        if epoch in validation_epochs:
+            model.eval()
+            correct, total = 0, 0
+            with torch.no_grad():
+                for batch in tqdm(test_loader, desc=f"Epoch {epoch+1} Validation", leave=False):
+                    input_ids, attention_mask, labels = [b.to(device) for b in batch]
+                    outputs = model(input_ids, attention_mask=attention_mask)
+                    _, predicted = torch.max(outputs.logits, 1)
+                    total += labels.size(0)
+                    correct += (predicted == labels).sum().item()
+            val_acc = correct / total
+            logging.info(f"Epoch {epoch+1:02d} | Validation Accuracy: {val_acc * 100:.2f}%")
 
-    # Test the model on the test dataset.
-    logging.info("Testing the model on the test dataset...")
+    # Save the trained model to a single file "seahorse.pt"
+    torch.save(model.state_dict(), str(MODEL_SAVE_PATH))
+    logging.info(f"Saved model state dictionary to '{MODEL_SAVE_PATH}'")
+
+    # Optionally, you can also save the tokenizer (saved in a folder if needed)
+    TOKENIZER_SAVE_DIR = BASE_DIR / "tokenizer"
+    TOKENIZER_SAVE_DIR.mkdir(exist_ok=True)
+    tokenizer.save_pretrained(str(TOKENIZER_SAVE_DIR))
+    logging.info(f"Saved tokenizer to '{TOKENIZER_SAVE_DIR}'")
+
+    # Final test evaluation on the test dataset.
+    logging.info("Final testing on the test dataset...")
     model.eval()
     correct, total = 0, 0
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Testing", leave=False):
+        for batch in tqdm(test_loader, desc="Final Testing", leave=False):
             input_ids, attention_mask, labels = [b.to(device) for b in batch]
             outputs = model(input_ids, attention_mask=attention_mask)
             _, predicted = torch.max(outputs.logits, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-
-    accuracy = correct / total
-    logging.info(f"Overall Accuracy: {accuracy * 100:.2f}%")
+    final_acc = correct / total
+    logging.info(f"Final Overall Accuracy: {final_acc * 100:.2f}%")
 
 if __name__ == "__main__":
     main()

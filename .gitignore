@@ -1,4 +1,5 @@
 venv
-seahorse_pt
+seahorse.pt
 __pycache__
 ai.log
+tokenizer
