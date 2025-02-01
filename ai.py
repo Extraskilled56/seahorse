@@ -96,8 +96,9 @@ def main():
     logging.info(f"Adjusted Parameters: Batch Size={batch_size}, Workers={num_workers}, Mixed Precision={use_amp}")
 
     # Load tokenizer and model.
-    tokenizer = BertTokenizer.from_pretrained('bert-large-uncased')
-    model = BertForSequenceClassification.from_pretrained('bert-large-uncased', num_labels=2)
+    # Use "bert-base-uncased" for a smaller model.
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
     model.to(device)
     logging.info(f"Total Trainable Parameters: {count_parameters(model):,}")
 
