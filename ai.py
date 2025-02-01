@@ -96,7 +96,7 @@ def main():
     logging.info(f"Adjusted Parameters: Batch Size={batch_size}, Workers={num_workers}, Mixed Precision={use_amp}")
 
     # Load tokenizer and model.
-    # Use "bert-base-uncased" for a smaller model.
+    # Using "bert-base-uncased" for a smaller model.
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
     model.to(device)
@@ -111,8 +111,8 @@ def main():
     labels = torch.tensor(df['label'].values)
     dataset = TensorDataset(encoded['input_ids'], encoded['attention_mask'], labels)
 
-    # Split dataset into training and validation sets.
-    train_data, val_data = train_test_split(dataset, test_size=0.2, random_state=42)
+    # Optionally, split dataset into training and testing sets.
+    train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
     # DataLoader settings.
     dataloader_kwargs = {
@@ -124,7 +124,7 @@ def main():
         dataloader_kwargs["persistent_workers"] = True
 
     train_loader = DataLoader(train_data, shuffle=True, **dataloader_kwargs)
-    val_loader = DataLoader(val_data, **dataloader_kwargs)
+    test_loader = DataLoader(test_data, **dataloader_kwargs)
 
     # Compute class weights for imbalanced datasets.
     class_weights = compute_class_weight(
@@ -162,20 +162,8 @@ def main():
 
             total_loss += loss.item()
 
-        # Validation loop.
-        model.eval()
-        correct, total = 0, 0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} Validation", leave=False):
-                input_ids, attention_mask, labels = [b.to(device) for b in batch]
-                outputs = model(input_ids, attention_mask=attention_mask)
-                _, predicted = torch.max(outputs.logits, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-
         avg_loss = total_loss / len(train_loader)
-        val_acc = correct / total
-        logging.info(f"Epoch {epoch+1:02d} | Loss: {avg_loss:.4f} | Val Acc: {val_acc:.4f}")
+        logging.info(f"Epoch {epoch+1:02d} | Loss: {avg_loss:.4f}")
 
     # Save the trained model and tokenizer.
     MODEL_SAVE_DIR.mkdir(exist_ok=True)
@@ -183,9 +171,8 @@ def main():
     tokenizer.save_pretrained(str(MODEL_SAVE_DIR))
     logging.info(f"Saved PyTorch model to '{MODEL_SAVE_DIR}' directory")
 
-    # Test the model on the entire dataset.
-    logging.info("Testing the model on the entire dataset...")
-    test_loader = DataLoader(dataset, **dataloader_kwargs)
+    # Test the model on the test dataset.
+    logging.info("Testing the model on the test dataset...")
     model.eval()
     correct, total = 0, 0
     with torch.no_grad():
